@@ -13,7 +13,7 @@ from sklearn.model_selection import KFold
 
 
 def pbias(predicted, observed):
-    return 100.0 * np.sum(observed - predicted) / np.sum(observed)
+    return 100.0 * np.sum(predicted - observed ) / np.sum(observed)
 
 def nmae(predicted, observed):
     return 100 * mean_absolute_error(observed, predicted) / np.mean(observed)
@@ -187,3 +187,277 @@ def run_xgb_kfold(X, y, n_splits=5, random_state=153, params=None):
 
 
 # ------
+
+
+def calculate_yearly_metrics(
+    df,
+    group_by_field=False,
+    calculate_yield=True,
+    calculate_irrigation=True,
+    model=None,
+    estimated="Simulated"
+):
+    """
+    Calculate RMSE, PBIAS, and NMAE for yield and/or irrigation,
+    grouped by Year or FieldID, and optionally tagged with a model name.
+
+    Parameters:
+    - df: DataFrame with required columns like:
+        ['Year', 'FieldID', 'Reported_Yield', 'Simulated_Yield', ...]
+    - group_by_field: Group by 'FieldID' instead of 'Year'
+    - calculate_yield: Whether to calculate metrics for yield
+    - calculate_irrigation: Whether to calculate metrics for irrigation
+    - model: Optional string tag to label the model
+    - estimated: Column prefix for simulated or predicted values (default: 'Simulated')
+
+    Returns:
+    - A tidy DataFrame with columns like:
+        ['Year' or 'FieldID', 'Metric', 'Yield', 'Irrigation', 'Model' (if provided)]
+    """
+
+    group_cols = ['FieldID'] if group_by_field else ['Year']
+    grouped = df.groupby(group_cols)
+    results = []
+
+    # Column names
+    sim_yield_col = f"{estimated}_Yield"
+    sim_irr_col = f"{estimated}_Irrigation"
+
+    for keys, group in grouped:
+        # Fix single-element tuple key from groupby
+        if isinstance(keys, tuple) and len(keys) == 1:
+            keys = keys[0]
+
+        base = {"FieldID": keys} if group_by_field else {"Year": keys}
+        if model:
+            base["Model"] = model
+        record = {}
+
+        # --- Yield metrics ---
+        if calculate_yield:
+            yield_data = group[['Reported_Yield', sim_yield_col]].dropna()
+            if not yield_data.empty:
+                obs_y = yield_data['Reported_Yield'].values
+                sim_y = yield_data[sim_yield_col].values
+#                 print(len(obs_y))
+                rmse_y = np.sqrt(mean_squared_error(obs_y, sim_y))
+                pbias_y = 100 * np.sum(sim_y - obs_y) / np.sum(obs_y)
+                nmae_y = 100 * mean_absolute_error(obs_y, sim_y) / np.mean(obs_y)
+            else:
+                rmse_y = pbias_y = nmae_y = np.nan
+
+            record["RMSE"] = {"Yield": rmse_y}
+            record["PBIAS"] = {"Yield": pbias_y}
+            record["NMAE"] = {"Yield": nmae_y}
+
+        # --- Irrigation metrics ---
+        if calculate_irrigation:
+            irr_data = group[['Reported_Irrigation', sim_irr_col]].dropna()
+            if not irr_data.empty:
+                obs_i = irr_data['Reported_Irrigation'].values
+                sim_i = irr_data[sim_irr_col].values
+
+                rmse_i = np.sqrt(mean_squared_error(obs_i, sim_i))
+                pbias_i = 100 * np.sum( sim_i - obs_i) / np.sum(obs_i)
+                nmae_i = 100 * mean_absolute_error(obs_i, sim_i) / np.mean(obs_i)
+            else:
+                rmse_i = pbias_i = nmae_i = np.nan
+
+            if "RMSE" in record: record["RMSE"]["Irrigation"] = rmse_i
+            else: record["RMSE"] = {"Irrigation": rmse_i}
+
+            if "PBIAS" in record: record["PBIAS"]["Irrigation"] = pbias_i
+            else: record["PBIAS"] = {"Irrigation": pbias_i}
+
+            if "NMAE" in record: record["NMAE"]["Irrigation"] = nmae_i
+            else: record["NMAE"] = {"Irrigation": nmae_i}
+
+        # --- Format result ---
+        for metric, values in record.items():
+            row = base.copy()
+            row["Metric"] = metric
+            if calculate_yield:
+                row["Yield"] = values.get("Yield", np.nan)
+            if calculate_irrigation:
+                row["Irrigation"] = values.get("Irrigation", np.nan)
+            results.append(row)
+
+    return pd.DataFrame(results)
+
+
+# ----  Holdout model function ----
+
+def evaluate_xgboost_holdout(
+    df,
+    feature_start_col: int = 3,
+    target_col: str = "Reported_Yield",
+    group_col: str = "Year",  
+    param_grid: dict = None,
+    random_state: int = 151,
+    test_size: float = 0.2,
+    use_test_split: bool = False,
+    filter_features: bool = False,
+    selected_features: list = None,
+    skip_single_fields: bool = True
+):
+    """
+    Evaluate XGBoost using a group-based holdout approach.
+
+    For each unique value in `group_col`, that group is used as the holdout set,
+    while the remaining data is used to train the model. Optionally performs 
+    a train/test split within the training set. Results are collected for 
+    training, test (if used), and holdout predictions.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataset containing features, target, and grouping column.
+
+    feature_start_col : int, default=3
+        Column index from which feature columns start (if not using selected_features).
+
+    target_col : str, default="Reported_Yield"
+        Name of the target column.
+
+    group_col : str, default="Year"
+        Column name used for grouping the holdout (e.g., "Year" or "FieldID").
+
+    param_grid : dict, optional
+        Parameter grid for GridSearchCV. If None, a default small grid is used.
+
+    random_state : int, default=151
+        Random seed for reproducibility.
+
+    test_size : float, default=0.2
+        Proportion of data to use for test split when use_test_split=True.
+
+    use_test_split : bool, default=False
+        If True, split the training set into train/test. Otherwise, use all non-holdout data for training.
+
+    filter_features : bool, default=False
+        If True, use only selected_features for training. Otherwise, use all columns after feature_start_col.
+
+    selected_features : list, optional
+        List of feature names to use if filter_features=True.
+
+    skip_single_fields : bool, default=True
+        If True, skip groups (by group_col) that have 1 or fewer samples.
+        If False, include them in evaluation, but note results may be unstable.
+
+    Returns
+    -------
+    train_df : pd.DataFrame
+        Predictions vs actuals for training data.
+
+    test_df : pd.DataFrame or None
+        Predictions vs actuals for test data (if use_test_split=True).
+
+    holdout_df : pd.DataFrame
+        Predictions vs actuals for each holdout group.
+    """
+
+    # --- Feature & target selection ---
+    if filter_features and selected_features is not None:
+        X_full = df[selected_features]
+    else:
+        X_full = df.iloc[:, feature_start_col:]
+
+    y_full = df[target_col]
+    groups = df[group_col]
+
+    # --- Default parameter grid if not provided ---
+    if param_grid is None:
+        param_grid = {
+            'n_estimators': [50],
+            'max_depth': [2],
+            'learning_rate': [0.2],
+            'subsample': [0.9],
+            'colsample_bytree': [0.7],
+            'gamma': [0.6],
+            'reg_alpha': [0.4]
+        }
+
+    mae_scorer = make_scorer(mean_absolute_error, greater_is_better=False)
+    xgb_regressor = xgb.XGBRegressor()
+
+    holdout_results, train_results, test_results = [], [], []
+
+    # --- Loop over unique groups ---
+    unique_values = df[group_col].unique()
+
+    for val in unique_values:
+        mask = (groups == val)
+
+        # Optionally skip very small sets
+        if skip_single_fields and mask.sum() <= 1:
+            print(f"Skipping {group_col}={val} (only {mask.sum()} samples).")
+            continue
+
+        # Define holdout and training sets
+        X_holdout = X_full[mask]
+        y_holdout = y_full[mask]
+        X_rest = X_full[~mask]
+        y_rest = y_full[~mask]
+
+        print(f"\n=== Holdout {group_col}: {val} ({mask.sum()} samples) ===")
+
+        if use_test_split:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_rest, y_rest, test_size=test_size, random_state=random_state
+            )
+        else:
+            X_train, y_train = X_rest, y_rest
+            X_test, y_test = None, None
+
+        # --- Hyperparameter search ---
+        grid_search = GridSearchCV(
+            estimator=xgb_regressor,
+            param_grid=param_grid,
+            scoring=mae_scorer,
+            cv=5,
+            n_jobs=8
+        )
+        grid_search.fit(X_train, y_train)
+
+        best_model = xgb.XGBRegressor(**grid_search.best_params_)
+        best_model.fit(X_train, y_train)
+
+        # --- Predictions ---
+        y_pred_train = best_model.predict(X_train)
+        y_pred_holdout = best_model.predict(X_holdout)
+
+        holdout_mae = mean_absolute_error(y_holdout, y_pred_holdout)
+        holdout_pbias_val = pbias(y_pred_holdout, y_holdout)
+        holdout_r2 = r2_score(y_holdout, y_pred_holdout)
+
+        print(f"Holdout MAE: {holdout_mae:.4f}")
+        print(f"Holdout PBIAS: {holdout_pbias_val:.2f}%")
+        print(f"Holdout R2: {holdout_r2:.2f}")
+
+        # --- Store results ---
+        holdout_results.extend([
+            {"Actual": a, "Predicted": p, group_col: str(val)}
+            for a, p in zip(y_holdout, y_pred_holdout)
+        ])
+        train_results.extend([
+            {"Actual": a, "Predicted": p, group_col: str(val)}
+            for a, p in zip(y_train, y_pred_train)
+        ])
+        if use_test_split:
+            y_pred_test = best_model.predict(X_test)
+            test_results.extend([
+                {"Actual": a, "Predicted": p, group_col: str(val)}
+                for a, p in zip(y_test, y_pred_test)
+            ])
+
+    # --- Convert to DataFrames ---
+    holdout_df = pd.DataFrame(holdout_results)
+    train_df = pd.DataFrame(train_results)
+    test_df = pd.DataFrame(test_results) if use_test_split else None
+
+    # --- Sort if group_col is Year ---
+    if group_col == "Year":
+        holdout_df = holdout_df.sort_values(by="Year").reset_index(drop=True)
+
+    return train_df, test_df, holdout_df
+
