@@ -118,14 +118,45 @@ def evaluate_model(
 # --- kFold----
 
 
-def run_xgb_kfold(X, y, n_splits=5, random_state=153, params=None):
+def run_xgb_kfold(
+    X, 
+    y, 
+    n_splits=5, 
+    random_state=153, 
+    params=None, 
+    df=None, 
+    field_col="FieldID", 
+    year_col="Year"
+):
     """
-    Run XGBoost regression with KFold CV.
-    
-    Returns:
-        results_df: DataFrame with columns:
-                    ['Fold', 'Set', 'Actual', 'Predicted']
-        metrics_df: DataFrame with MAE and R2 per fold
+    Run XGBoost regression with KFold CV, tracking FieldID and Year.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix.
+    y : pd.Series
+        Target variable.
+    n_splits : int, default=5
+        Number of folds in KFold CV.
+    random_state : int, default=153
+        Random seed for reproducibility.
+    params : dict, optional
+        XGBoost parameters. If None, uses default small set.
+    df : pd.DataFrame, optional
+        Original dataframe containing FieldID and Year.
+    field_col : str, default="FieldID"
+        Column name for field IDs.
+    year_col : str, default="Year"
+        Column name for years.
+
+    Returns
+    -------
+    results_df : pd.DataFrame
+        Predictions and actuals with columns:
+        ['Fold', 'Set', 'Actual', 'Predicted', 'FieldID', 'Year']
+    metrics_df : pd.DataFrame
+        MAE and R² per fold.
     """
     if params is None:
         params = {
@@ -156,19 +187,33 @@ def run_xgb_kfold(X, y, n_splits=5, random_state=153, params=None):
         y_train_pred = model.predict(X_train)
         y_test_pred = model.predict(X_test)
 
+        # Grab metadata (if df provided, year and fieldid)
+        if df is not None:
+            train_fields = df.iloc[train_idx][field_col].values
+            train_years = df.iloc[train_idx][year_col].values
+            test_fields = df.iloc[test_idx][field_col].values
+            test_years = df.iloc[test_idx][year_col].values
+        else:
+            train_fields = train_years = [None] * len(train_idx)
+            test_fields = test_years = [None] * len(test_idx)
+
         # Save results
         results.extend([
             pd.DataFrame({
                 'Fold': fold,
                 'Set': 'Train',
-                'Actual': y_train,
-                'Predicted': y_train_pred
+                'Actual': y_train.values,
+                'Predicted': y_train_pred,
+                'FieldID': train_fields,
+                'Year': train_years
             }),
             pd.DataFrame({
                 'Fold': fold,
                 'Set': 'Test',
-                'Actual': y_test,
-                'Predicted': y_test_pred
+                'Actual': y_test.values,
+                'Predicted': y_test_pred,
+                'FieldID': test_fields,
+                'Year': test_years
             })
         ])
 
@@ -460,4 +505,63 @@ def evaluate_xgboost_holdout(
         holdout_df = holdout_df.sort_values(by="Year").reset_index(drop=True)
 
     return train_df, test_df, holdout_df
+
+                            # ---- residuals plot ----
+
+def plot_residuals(
+    df,
+    group_col="Year",
+    resid_col="Resid",
+    pred_col="Predicted",
+    plot_type="box",  # 'box' or 'scatter'
+    figsize=(8, 6),
+    xlabel=None,
+    ylabel=None,
+    add_half_std_lines=True,
+    half_std_upper=1.365,
+    half_std_label= "Half SD" 
+):
+    """
+    Plot residuals as boxplot (by group_col) or scatterplot (vs Predicted).
+
+    Parameters:
+    - df: DataFrame containing residuals and predictions
+    - group_col: Column for x-axis in boxplot (e.g., 'Year', 'FieldID')
+    - resid_col: Name of the residuals column
+    - pred_col: Name of predicted values column (used for scatterplot)
+    - plot_type: 'box' for boxplot, 'scatter' for scatterplot
+    - figsize: Tuple for figure size
+    - xlabel: X-axis label
+    - ylabel: Y-axis label
+    - add_half_std_lines: If True, adds horizontal green dashed lines at ±half_std
+    - half_std_upper: Upper threshold (default 1.365)
+    - half_std_lower: Lower threshold (default -1.365)
+    - half_std_label: Label for horizontal lines
+    """
+
+    plt.figure(figsize=figsize)
+
+    if plot_type == "box":
+        sns.boxplot(x=group_col, y=resid_col, data=df, palette="Set3")
+        plt.xticks(rotation=45, ha="right")
+        plt.xlabel(group_col)
+    elif plot_type == "scatter":
+        sns.scatterplot(x=pred_col, y=resid_col, data=df, color="blue", edgecolor="k")
+        plt.xlabel("Predicted Values")
+    else:
+        raise ValueError("plot_type must be either 'box' or 'scatter'")
+
+    plt.axhline(0, linestyle="--", color="red", linewidth=1)
+
+    if add_half_std_lines:
+        plt.axhline(half_std_upper, linestyle="--", color="k", linewidth=1, label=f"{half_std_label}")
+        
+        plt.axhline(-half_std_upper, linestyle="--", color="k", linewidth=1)
+        plt.legend()
+
+    plt.ylabel(ylabel, fontsize=12)
+    plt.xlabel(xlabel, fontsize=12)
+
+    plt.tight_layout()
+    plt.show()
 
