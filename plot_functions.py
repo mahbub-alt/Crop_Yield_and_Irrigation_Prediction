@@ -2,14 +2,21 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from xgboost import XGBRegressor
-import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_absolute_error,make_scorer, mean_squared_error
 from sklearn.model_selection import train_test_split, GridSearchCV
+import matplotlib.lines as mlines
+
 import shap
+from xgboost import XGBRegressor
+import xgboost as xgb
+
 from scipy.stats import pearsonr
 from sklearn.model_selection import KFold
+import math
+
+plt.rcParams["font.family"] = "Times New Roman"   # set font to Times New Roman
+plt.rcParams["figure.dpi"] = 500                  # high resolution
 
 
 def pbias(predicted, observed):
@@ -18,99 +25,172 @@ def pbias(predicted, observed):
 def nmae(predicted, observed):
     return 100 * mean_absolute_error(observed, predicted) / np.mean(observed)
 
+
+
 def evaluate_model(
     y_train=None, y_pred_train=None,
     y_test=None, y_pred_test=None,
     y_holdout=None, y_pred_holdout=None,
-    xlabel='Observed', ylabel='Predicted',
-    units='', xlim=(3.5, 18), ylim=(3.5, 18),
-    hue=None, text="Train", label = None,
-    p =.35, # x axis location of validation text , could be .02, .35 or .65
-    legend_outside=False
+    xlabel: str = 'Observed',
+    ylabel: str = 'Predicted',
+    fontsize = 13,
+    units: str = '',
+    xlim: tuple = (3.5, 18),
+    ylim: tuple = (3.5, 18),
+    hue: str = None,
+    text: str = "Holdout",
+    label: str = None,
+    p: float = 0.35,  # x-axis location for holdout annotation text (0–1 fraction)
+    legend_outside: bool = False,
+    extra_middle_text: str = None  # optional text displayed at the top center
 ):
+    """
+    Evaluate model predictions for Train, Test, and Holdout sets.
+    Generates a scatter + regression plot with performance metrics annotated.
 
+    Parameters
+    ----------
+    y_train : array-like, optional
+        Observed values for training set.
+    y_pred_train : array-like, optional
+        Predicted values for training set.
+    y_test : array-like, optional
+        Observed values for test set.
+    y_pred_test : array-like, optional
+        Predicted values for test set.
+    y_holdout : array-like, optional
+        Observed values for holdout set.
+    y_pred_holdout : array-like, optional
+        Predicted values for holdout set.
+    xlabel : str, default='Observed'
+        Label for the x-axis.
+    ylabel : str, default='Predicted'
+        Label for the y-axis.
+    units : str, default=''
+        Units to append to axis labels (e.g., "kg/ha").
+    xlim : tuple, default=(3.5, 18)
+        X-axis limits.
+    ylim : tuple, default=(3.5, 18)
+        Y-axis limits.
+    hue : str, optional
+        Column name for coloring points (only used for holdout plot).
+    text : str, default='Holdout'
+        Annotation text for the Holdout set metrics. 
+        (Note: This parameter only applies to the Holdout set.)
+    label : str, optional
+        Legend label for Holdout scatter plot.
+    p : float, default=0.35
+        Horizontal position (0–1) for the Holdout metrics annotation.
+    legend_outside : bool, default=False
+        If True, place the legend outside the plot.
+    extra_middle_text : str, optional
+        Additional text to display at the top center of the plot.
+
+    Returns
+    -------
+    metrics : dict
+        Dictionary with RMSE, NMAE, PBIAS, and R² for each dataset plotted.
+    """
     metrics = {}
 
     plt.figure(figsize=(7.5, 5.5))
-    
 
-    # --- Train Plot ---
+    # --- Train Set ---
     if y_train is not None and y_pred_train is not None:
         metrics["Train"] = {
             "rmse": np.sqrt(mean_squared_error(y_train, y_pred_train)),
             "nmae": nmae(y_pred_train, y_train),
             "pbias": pbias(y_pred_train, y_train),
-            "r2": r2_score(y_train, y_pred_train)
+            "r2": r2_score(y_train, y_pred_train),
         }
 
-        sns.scatterplot(x=y_train, y=y_pred_train, label="Train", color="blue", edgecolor="k")
-        sns.regplot(x=y_train, y=y_pred_train, scatter=False, ci=None, color="blue",label="Train regression line" )
+        sns.scatterplot(x=y_train, y=y_pred_train, label="Train",
+                        color="blue", edgecolor="k")
+        sns.regplot(x=y_train, y=y_pred_train, scatter=False,
+                    ci=None, color="blue", label="Train regression line")
 
         plt.annotate(
-            f"Train Set:\nRMSE: {metrics['Train']['rmse']:.2f}\n"
+            f"Train Set:\nRMSE: {metrics['Train']['rmse']:.1f}\n"
             f"PBIAS: {metrics['Train']['pbias']:.2f}%\n"
-            f"NMAE: {metrics['Train']['nmae']:.2f}%\n"
+            f"NMAE: {metrics['Train']['nmae']:.1f}%\n"
             f"$R^2$: {metrics['Train']['r2']:.2f}",
-            xy=(0.02, 0.80), xycoords='axes fraction', fontsize=11
+            xy=(0.02, 0.80), xycoords='axes fraction', fontsize=fontsize
         )
 
-    # --- Test Plot ---
+    # --- Test Set ---
     if y_test is not None and y_pred_test is not None:
         metrics["Test"] = {
             "rmse": np.sqrt(mean_squared_error(y_test, y_pred_test)),
             "nmae": nmae(y_pred_test, y_test),
             "pbias": pbias(y_pred_test, y_test),
-            "r2": r2_score(y_test, y_pred_test)
+            "r2": r2_score(y_test, y_pred_test),
         }
 
-        sns.scatterplot(x=y_test, y=y_pred_test, label="Test", color="red", edgecolor="k")
-        sns.regplot(x=y_test, y=y_pred_test, scatter=False, ci=None, color="red", label="Test regression line")
+        sns.scatterplot(x=y_test, y=y_pred_test, label="Test",
+                        color="red", edgecolor="k")
+        sns.regplot(x=y_test, y=y_pred_test, scatter=False,
+                    ci=None, color="red", label="Test regression line")
 
         plt.annotate(
-            f"Test Set:\nRMSE: {metrics['Test']['rmse']:.2f}\n"
+            f"Test Set:\nRMSE: {metrics['Test']['rmse']:.1f}\n"
             f"PBIAS: {metrics['Test']['pbias']:.2f}%\n"
-            f"NMAE: {metrics['Test']['nmae']:.2f}%\n"
+            f"NMAE: {metrics['Test']['nmae']:.1f}%\n"
             f"$R^2$: {metrics['Test']['r2']:.2f}",
-            xy=(0.65, 0.80), xycoords='axes fraction', fontsize=11
+            xy=(0.65, 0.80), xycoords='axes fraction', fontsize=fontsize
         )
 
-    # --- Holdout Plot ---
+    # --- Holdout Set ---
     if y_holdout is not None and y_pred_holdout is not None:
         metrics["Holdout"] = {
             "rmse": np.sqrt(mean_squared_error(y_holdout, y_pred_holdout)),
             "nmae": nmae(y_pred_holdout, y_holdout),
             "pbias": pbias(y_pred_holdout, y_holdout),
-            "r2": r2_score(y_holdout, y_pred_holdout)
+            "r2": r2_score(y_holdout, y_pred_holdout),
         }
-        
 
+        sns.scatterplot(x=y_holdout, y=y_pred_holdout,
+                        label=label, color="red", edgecolor="k", hue=hue)
+        sns.regplot(x=y_holdout, y=y_pred_holdout, scatter=False,
+                    ci=None, color="red", label="Holdout regression line")
 
-        sns.scatterplot(x=y_holdout, y=y_pred_holdout, label=label, color="red", edgecolor="k", hue=hue)
-        sns.regplot(x=y_holdout, y=y_pred_holdout, scatter=False, ci=None, color="red", label="Holdout regression line")
-
+        # Annotate metrics + holdout text
         plt.annotate(
-            f"{text}:\nRMSE: {metrics['Holdout']['rmse']:.2f}\n"
-              f"PBIAS: {metrics['Holdout']['pbias']:.2f}%\n"
-            f"NMAE: {metrics['Holdout']['nmae']:.2f}%\n"
-          
+            f"{text}\nRMSE: {metrics['Holdout']['rmse']:.1f}\n"
+            f"PBIAS: {metrics['Holdout']['pbias']:.2f}%\n"
+            f"NMAE: {metrics['Holdout']['nmae']:.1f}%\n"
             f"$R^2$: {metrics['Holdout']['r2']:.2f}",
-            xy=(p, 0.80), xycoords='axes fraction', fontsize=11
+            xy=(p, 0.80), xycoords='axes fraction', fontsize=fontsize
         )
 
     # Axis and layout
-    plt.xlabel(f"{xlabel} ({units})", fontsize=12)
-    plt.ylabel(f"{ylabel} ({units})", fontsize=12)
+    plt.xlabel(f"{xlabel} ({units})", fontsize=fontsize)
+    plt.ylabel(f"{ylabel} ({units})", fontsize=fontsize)
     plt.xlim(xlim)
     plt.ylim(ylim)
-    plt.axline((0, 0), slope=1, label='1:1 line', color='gray', linestyle='--')
-    
+    plt.axline((0, 0), slope=1, label='1:1 line',
+               color='gray', linestyle='--')
+
+    # Legend positioning
     if legend_outside:
-        plt.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), borderaxespad=0)
+        plt.legend(loc='center left', bbox_to_anchor=(1.02, 0.5),
+                   borderaxespad=0)
     else:
         plt.legend(loc='lower right')
-        
+
+    # Extra annotation at the top center (new feature)
+    if extra_middle_text is not None:
+        plt.text(
+            0.45, 0.94, extra_middle_text,
+            ha='center', va='bottom',
+            transform=plt.gca().transAxes,
+            fontsize=fontsize
+        )
+
     plt.tight_layout()
     plt.show()
+
+    return metrics
+
 
 #     return metrics
 
@@ -475,9 +555,9 @@ def evaluate_xgboost_holdout(
         holdout_pbias_val = pbias(y_pred_holdout, y_holdout)
         holdout_r2 = r2_score(y_holdout, y_pred_holdout)
 
-        print(f"Holdout MAE: {holdout_mae:.4f}")
-        print(f"Holdout PBIAS: {holdout_pbias_val:.2f}%")
-        print(f"Holdout R2: {holdout_r2:.2f}")
+        print(f"Holdout MAE: {holdout_mae:.1f}")
+        print(f"Holdout PBIAS: {holdout_pbias_val:.1f}%")
+        print(f"Holdout R2: {holdout_r2:.1f}")
 
         # --- Store results ---
         holdout_results.extend([
@@ -517,6 +597,7 @@ def plot_residuals(
     figsize=(8, 6),
     xlabel=None,
     ylabel=None,
+    fontsize = 13,
     add_half_std_lines=True,
     half_std_upper=1.365,
     half_std_label= "Half SD" 
@@ -559,9 +640,99 @@ def plot_residuals(
         plt.axhline(-half_std_upper, linestyle="--", color="k", linewidth=1)
         plt.legend()
 
-    plt.ylabel(ylabel, fontsize=12)
-    plt.xlabel(xlabel, fontsize=12)
+    plt.ylabel(ylabel, fontsize=fontsize)
+    plt.xlabel(xlabel, fontsize=fontsize)
 
     plt.tight_layout()
     plt.show()
+# --------------------------------- --------------------------------- 
 
+def plot_comparison(train_df, test_df, reported_col="Reported_Yield", simulated_col="Simulated_Yield", 
+                    ylim=(0, 20), cols=2, p=0.02, ylabel='Yield (t/ha)' ):
+    plt.rcParams["figure.dpi"] = 500
+    # Combine all unique FieldIDs
+    unique_fields = sorted(set(train_df['FieldID']).union(test_df['FieldID']))
+    rows = math.ceil(len(unique_fields) / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(14, rows * 3), squeeze=False)
+
+    # Determine full year range from both train and test data
+    all_years_global = sorted(
+        set(train_df['Year'].dropna().astype(int)).union(test_df['Year'].dropna().astype(int))
+    )
+    min_year = int(min(all_years_global))
+    max_year = int(max(all_years_global))
+    full_years = list(range(min_year, max_year + 1))
+    xtick_labels = [str(year) if year % 2 == 0 else '' for year in full_years]
+
+    for idx, field_id in enumerate(unique_fields):
+        r, c = divmod(idx, cols)
+        ax = axes[r][c]
+
+        train_group = train_df[train_df['FieldID'] == field_id]
+        test_group = test_df[test_df['FieldID'] == field_id]
+
+        # Determine which dataset to use for metric computation
+        if not train_group.empty:
+            obs = train_group[reported_col].values
+            pred = train_group[simulated_col].values
+        elif not test_group.empty:
+            obs = test_group[reported_col].values
+            pred = test_group[simulated_col].values
+        else:
+            obs, pred = np.array([]), np.array([])
+
+        if len(obs) > 0 and len(pred) > 0:
+            rmse = mean_squared_error(obs, pred, squared=False)
+            pbias_val = pbias(pred, obs)
+            nmae_val = nmae(pred, obs)
+        else:
+            rmse, pbias_val, nmae_val = np.nan, np.nan, np.nan
+
+        # Plot train data (circle)
+        ax.plot(train_group['Year'], train_group[simulated_col], marker='o', linestyle='', color='blue')
+        ax.plot(train_group['Year'], train_group[reported_col], marker='o', linestyle='', color='orange')
+
+        # Plot test data (diamond)
+        ax.scatter(test_group['Year'], test_group[simulated_col], marker='D', color='red')
+        ax.scatter(test_group['Year'], test_group[reported_col], marker='D', color='orange')
+
+        # Set x-ticks
+        ax.set_xticks(full_years)
+        ax.set_xticklabels(xtick_labels, rotation=45, ha='right')
+
+        # FieldID label
+        ax.text(0.01, 0.95, f'FieldID: {field_id}', transform=ax.transAxes,
+                fontsize=fontsize, verticalalignment='top', bbox=dict(boxstyle='round,pad=.2', facecolor='white', edgecolor='gray'))
+
+        # Metric box
+        if not np.isnan(rmse):
+            # Set x position depending on the field ID
+            x_pos = 0.02 if field_id == "NC2" else 0.78
+
+            ax.annotate(
+                f"RMSE: {rmse:.1f}\n"
+                f"PBIAS: {pbias_val:.2f}%\n"
+                f"NMAE: {nmae_val:.1f}%",
+                xy=(x_pos, 0.05), xycoords='axes fraction',
+                fontsize=fontsize, verticalalignment='bottom',
+                bbox=dict(boxstyle="round,pad=0.2", edgecolor="black", facecolor="white", alpha=.4)
+            )
+        ax.set_xlabel('Year', fontsize=fontsize)
+        ax.set_ylabel(ylabel, fontsize=fontsize)
+        ax.set_ylim(*ylim)
+
+    # Remove empty subplots
+    for idx in range(len(unique_fields), rows * cols):
+        fig.delaxes(axes[idx // cols][idx % cols])
+
+    # Shared legend at bottom
+    handles = [
+        mlines.Line2D([], [], color='blue', marker='o', linestyle='None', label='Simulated (Train)'),
+        mlines.Line2D([], [], color='orange', marker='o', linestyle='None', label='Reported (Train)'),
+        mlines.Line2D([], [], color='red', marker='D', linestyle='None', label='Simulated (Test)'),
+        mlines.Line2D([], [], color='orange', marker='D', linestyle='None', label='Reported (Test)')
+    ]
+    fig.legend(handles=handles, loc='lower center', ncol=4, bbox_to_anchor=(0.5, p), fontsize=fontsize)
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
+    plt.show()
