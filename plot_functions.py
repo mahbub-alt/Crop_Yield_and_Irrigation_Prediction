@@ -7,9 +7,9 @@ from sklearn.metrics import r2_score, mean_absolute_error,make_scorer, mean_squa
 from sklearn.model_selection import train_test_split, GridSearchCV
 import matplotlib.lines as mlines
 
-import shap
-from xgboost import XGBRegressor
-import xgboost as xgb
+# import shap
+# from xgboost import XGBRegressor
+# import xgboost as xgb
 
 from scipy.stats import pearsonr
 from sklearn.model_selection import KFold
@@ -93,8 +93,11 @@ def evaluate_model(
     """
     metrics = {}
 
-    plt.figure(figsize=(7.5, 5.5))
-
+    plt.figure(figsize=(7, 5))
+    
+    # annotation height
+    y_pos = 0.75
+    
     # --- Train Set ---
     if y_train is not None and y_pred_train is not None:
         metrics["Train"] = {
@@ -111,10 +114,10 @@ def evaluate_model(
 
         plt.annotate(
             f"Train Set:\nRMSE: {metrics['Train']['rmse']:.1f}\n"
-            f"PBIAS: {metrics['Train']['pbias']:.2f}%\n"
+            f"PBIAS: {metrics['Train']['pbias']:.1f}%\n"
             f"NMAE: {metrics['Train']['nmae']:.1f}%\n"
             f"$R^2$: {metrics['Train']['r2']:.2f}",
-            xy=(0.02, 0.80), xycoords='axes fraction', fontsize=fontsize
+            xy=(0.02, y_pos), xycoords='axes fraction', fontsize=fontsize
         )
 
     # --- Test Set ---
@@ -133,10 +136,10 @@ def evaluate_model(
 
         plt.annotate(
             f"Test Set:\nRMSE: {metrics['Test']['rmse']:.1f}\n"
-            f"PBIAS: {metrics['Test']['pbias']:.2f}%\n"
+            f"PBIAS: {metrics['Test']['pbias']:.1f}%\n"
             f"NMAE: {metrics['Test']['nmae']:.1f}%\n"
             f"$R^2$: {metrics['Test']['r2']:.2f}",
-            xy=(0.65, 0.80), xycoords='axes fraction', fontsize=fontsize
+            xy=(p, y_pos), xycoords='axes fraction', fontsize=fontsize
         )
 
     # --- Holdout Set ---
@@ -156,10 +159,10 @@ def evaluate_model(
         # Annotate metrics + holdout text
         plt.annotate(
             f"{text}\nRMSE: {metrics['Holdout']['rmse']:.1f}\n"
-            f"PBIAS: {metrics['Holdout']['pbias']:.2f}%\n"
+            f"PBIAS: {metrics['Holdout']['pbias']:.1f}%\n"
             f"NMAE: {metrics['Holdout']['nmae']:.1f}%\n"
             f"$R^2$: {metrics['Holdout']['r2']:.2f}",
-            xy=(p, 0.80), xycoords='axes fraction', fontsize=fontsize
+            xy=(p, y_pos), xycoords='axes fraction', fontsize=fontsize
         )
 
     # Axis and layout
@@ -557,7 +560,7 @@ def evaluate_xgboost_holdout(
 
         print(f"Holdout MAE: {holdout_mae:.1f}")
         print(f"Holdout PBIAS: {holdout_pbias_val:.1f}%")
-        print(f"Holdout R2: {holdout_r2:.1f}")
+        print(f"Holdout R2: {holdout_r2:.2f}")
 
         # --- Store results ---
         holdout_results.extend([
@@ -648,7 +651,7 @@ def plot_residuals(
 # --------------------------------- --------------------------------- 
 
 def plot_comparison(train_df, test_df, reported_col="Reported_Yield", simulated_col="Simulated_Yield", 
-                    ylim=(0, 20), cols=2, p=0.02, ylabel='Yield (t/ha)' ):
+                    ylim=(0, 20), cols=2, p=0.02, ylabel='Yield (t/ha)', fontsize = 13 ):
     plt.rcParams["figure.dpi"] = 500
     # Combine all unique FieldIDs
     unique_fields = sorted(set(train_df['FieldID']).union(test_df['FieldID']))
@@ -711,7 +714,7 @@ def plot_comparison(train_df, test_df, reported_col="Reported_Yield", simulated_
 
             ax.annotate(
                 f"RMSE: {rmse:.1f}\n"
-                f"PBIAS: {pbias_val:.2f}%\n"
+                f"PBIAS: {pbias_val:.1f}%\n"
                 f"NMAE: {nmae_val:.1f}%",
                 xy=(x_pos, 0.05), xycoords='axes fraction',
                 fontsize=fontsize, verticalalignment='bottom',
